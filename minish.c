@@ -58,7 +58,14 @@ int startShell(void)
 
   if (pid == 0)   // child
   {
-    if (execvp(minishBinary, minishArg) == -1)
+    if(strcmp(minishBinary, "cd") == 0)                                         // Handles CD command
+    {
+      if(chdir(minishArg[1]) == -1)
+      {
+        perror("CD failed");
+      }
+    }
+    else if (execvp(minishBinary, minishArg) == -1)
     {
       perror("Execv Failed");
       return -1;

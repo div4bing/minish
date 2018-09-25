@@ -49,6 +49,11 @@ int startShell(void)
   }
   minishArg[argCount] = NULL;
 
+  if(strcmp(minishBinary, "exit") == 0)                                         // Exit from minish
+  {
+    return 0;
+  }
+
   //###########################################################
   if ((pid = fork()) == -1)
   {
@@ -60,10 +65,10 @@ int startShell(void)
   {
     if(strcmp(minishBinary, "cd") == 0)                                         // Handles CD command
     {
-      if(chdir(minishArg[1]) == -1)
-      {
-        perror("CD failed");
-      }
+        if(chdir(minishArg[1]) == -1)
+        {
+          perror("CD failed");
+        }
     }
     else if (execvp(minishBinary, minishArg) == -1)
     {

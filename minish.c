@@ -6,17 +6,19 @@
 #include <string.h>
 #include <stdbool.h>
 
-#define COMMAND_SIZE 1048576
-#define BINARY_SIZE 1024
-#define ARGUMENT_SIZE 1024
+#define BINARY_SIZE 1024                     // 1024 * 1024
+#define ARGUMENT_SIZE 1024                   // 1024 * 1024
 
-int startShell(void);
-int parseInput(char * binary, char * args[ARGUMENT_SIZE]);  // Returns Numnber of Arguments
+int showMinish(void);
+long long fetchTotalCommands(char **commandWithArg);                            // Store | separated command and Retuns total commands
+int performCommand(char **commandWithArg, long long totalCommands);             // Perform the fork on individual comand
+int parseCommand(char *commandWithArg, char *command, char *argument[]);     // Return number of arguments
 
 int main(int argc, char * argv[])
 {
   int ret = 0;
-  ret = startShell();
+
+  ret = showMinish();
 
   if(ret != 0)
   {
@@ -25,116 +27,137 @@ int main(int argc, char * argv[])
   return 0;
 }
 
-int startShell(void)
+int showMinish(void)
 {
-  pid_t pid;
-  int * waitStatus;
-  char * minishBinary;
-  char * minishArg[ARGUMENT_SIZE];
-  int argCount = 0;
+  // pid_t pid;
+  long long totalCommands = 0;
+  char **commandWithArg = (char **)malloc(BINARY_SIZE*sizeof(char));
+  int status = 0;
 
-  minishBinary = malloc(BINARY_SIZE*sizeof(char));
-  for (int i=0; i<ARGUMENT_SIZE; i++)
+  for (int i = 0; i< BINARY_SIZE; i++)
   {
-    minishArg[i] = (char *)malloc(ARGUMENT_SIZE * sizeof(int));
+    commandWithArg[i] = (char *)malloc(BINARY_SIZE*sizeof(char));
   }
 
   printf("minish> ");
-  argCount = parseInput(minishBinary, minishArg);
 
-  printf("Binary: %s\n", minishBinary);
-  for (int i=0; i< argCount; i++)
-  {
-    printf("Argument%d: %s\n",i, minishArg[i]);
-  }
-  minishArg[argCount] = NULL;
+  totalCommands = fetchTotalCommands(commandWithArg);
 
-  if(strcmp(minishBinary, "exit") == 0)                                         // Exit from minish
-  {
-    return 0;
-  }
+  status = performCommand(commandWithArg, totalCommands);
 
-  //###########################################################
-  if ((pid = fork()) == -1)
-  {
-    perror("Failed to fork child process");
-    return -1;
-  }
-
-  if (pid == 0)   // child
-  {
-    if(strcmp(minishBinary, "cd") == 0)                                         // Handles CD command
-    {
-        if(chdir(minishArg[1]) == -1)
-        {
-          perror("CD failed");
-        }
-    }
-    else if (execvp(minishBinary, minishArg) == -1)
-    {
-      perror("Execv Failed");
-      return -1;
-    }
-  }
-
-  wait(waitStatus);
-
-  startShell();
-
-  free(minishBinary);
+  showMinish();
+  free(commandWithArg);
   return 0;
 }
 
-int parseInput(char * binary, char * args[ARGUMENT_SIZE])
+long long fetchTotalCommands(char **commandWithArg)
 {
-  unsigned char stdPtr = '\0';
-  int count = 0;
-  int a1,a2;
-  int argCount = 0;
+  char *inputString = NULL;
+  char *tempCommandWithArg = NULL;
+  size_t len = 0;
+  ssize_t lenOfCommand = 0;
+  long long commandCount = 0;
 
-// Get Binary
-  stdPtr = (char)getchar();
-  count = 0;
+  lenOfCommand = getline(&inputString, &len, stdin);
+  *(inputString+lenOfCommand) = '\0';
+  inputString = strtok(inputString, "\n");                                      // Trim inputString for \n
+  printf("Retrieved line is: [%s]\n", inputString);
 
-  while (stdPtr != ' ' && stdPtr != '\n')              // Scan till new line
+  tempCommandWithArg = strtok(inputString, "|");
+
+  while (tempCommandWithArg != NULL)
   {
-    binary[count++] = stdPtr;
-    stdPtr = (char)getchar();
-    if (stdPtr == '\n')
-    {
-      break;                        // End of input
-    }
+    strcpy(commandWithArg[commandCount++],tempCommandWithArg);
+    tempCommandWithArg = strtok(NULL, "|");
   }
 
-  binary[count] = '\0';
-  strcpy(args[0], binary);          // Copy first argument as binary itself
+  commandWithArg[commandCount] = NULL;     // In case if we want to detect how many command we have based till we find a NULL
 
-  if (stdPtr == '\n')
+  free(inputString);
+  free(tempCommandWithArg);
+  return commandCount;
+}
+
+int performCommand(char **commandWithArg, long long totalCommands)
+{
+  char *command = (char *)malloc(BINARY_SIZE*sizeof(char));
+  char *argument[ARGUMENT_SIZE] = {'\0'};
+  int totalArgument = 0;
+  int tmpTotalCmd = totalCommands;
+  pid_t pid;
+  int *wstatus;
+
+  for(int i=0; i< ARGUMENT_SIZE;i++)
   {
-    return 1;                        // End of input
+    argument[i] = malloc(ARGUMENT_SIZE*sizeof(char));
   }
 
-// Get arguments
-  stdPtr = (char)getchar();
-  a1 = 1;           // Our Frist arg is binary name itself
-  a2 = 0;
-
-  while (stdPtr != '\n')
+  while (tmpTotalCmd > 0)                                                        // Only do this if the total commands is at least 1
   {
-    while (stdPtr != ' ' && stdPtr != '\n')
-    {
-      args[a1][a2++] = stdPtr;
-      stdPtr = (char)getchar();
-    }
-    args[a1++][a2] = '\0';
-    if (stdPtr == '\n')
-    {
-      break;                        // End of input
-    }
-    a2 = 0;
-    stdPtr = (char)getchar();
-  }
-  argCount = a1;
+    // printf("Index#%lld\n", (totalCommands - tmpTotalCmd));
+    totalArgument = parseCommand(commandWithArg[totalCommands - tmpTotalCmd], command, argument);
+    tmpTotalCmd--;
 
-  return argCount;
+    argument[totalArgument] = '\0';
+//###########################################################
+    if ((pid = fork()) == -1)
+    {
+      perror("Failed to fork child process");
+      return -1;
+    }
+
+    if (pid == 0)   // child
+    {
+      if(strcmp(command, "cd") == 0)                                         // Handles CD command
+      {
+          if(chdir(argument[0]) == -1)
+          {
+            perror("CD failed");
+          }
+      }
+      else if (execvp(command, argument) == -1)
+      {
+        perror("Execv Failed");
+        return -1;
+      }
+    }
+
+    wait(wstatus);
+//###########################################################
+  }
+
+  free(command);
+  return 0;
+}
+
+int parseCommand(char* commandWithArg, char *command, char *argument[])
+{
+  char * tmpStr = strtok(commandWithArg, " ");
+  if (tmpStr != NULL)                             // Fetch the command first
+  {
+    strcpy(command,tmpStr);
+    strcpy(argument[0],tmpStr);                   // First argument should be the command itself
+  }
+  else
+  {
+    return 0;   // We don't have command so argument does not matter
+  }
+
+  int count = 1;
+  tmpStr = strtok(NULL, " ");                     // Start fetching arguments
+  while (tmpStr != NULL)
+  {
+    strcpy(argument[count++],tmpStr);
+    tmpStr = strtok(NULL, " ");
+  }
+
+  argument[count] = '\0';
+
+
+  // printf("Command: [%s]\n", command);
+  // for (int i=0; i < count; i++)
+  // {
+  //   printf("Argument#%d: [%s]\n",i, argument[i]);
+  // }
+  return count;
 }

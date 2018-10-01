@@ -13,6 +13,8 @@ int showMinish(void);
 long long fetchTotalCommands(char **commandWithArg);                            // Store | separated command and Retuns total commands
 int performCommand(char **commandWithArg, long long totalCommands);             // Perform the fork on individual comand
 int parseCommand(char *commandWithArg, char *command, char *argument[], int *isBackground, int *isInputRedirect, int *isOutputRedirect, char *inputFileName, char *outputFileName);     // Return number of arguments
+void sigChildhandler(int sig);
+
 
 int main(int argc, char * argv[])
 {
@@ -145,7 +147,7 @@ int performCommand(char **commandWithArg, long long totalCommands)
 
         if (isInputRedirect == 1)                                             // Redirecy Input
         {
-          printf("INPUT FILE: %s\n", inputFileName);
+          // printf("INPUT FILE: %s\n", inputFileName);
           inputRedirectFile = fopen(inputFileName,"r");
           dup2(fileno(inputRedirectFile), 0);
           fclose(inputRedirectFile);
@@ -153,7 +155,7 @@ int performCommand(char **commandWithArg, long long totalCommands)
 
         if (isOutputRedirect == 1)                                       // Redirect Output
         {
-          printf("OUTPUT FILE: %s\n", outputFileName);
+          // printf("OUTPUT FILE: %s\n", outputFileName);
           outputRedirectFile = fopen(outputFileName,"w");
           dup2(fileno(outputRedirectFile), 1);
           fclose(outputRedirectFile);
@@ -175,7 +177,7 @@ int performCommand(char **commandWithArg, long long totalCommands)
       }
       else
       {
-        waitpid(-1, wstatus, WNOHANG);
+        signal(SIGCHLD, sigChildhandler);                         // Set handle to control child
       }
     }
 //###########################################################
@@ -213,11 +215,11 @@ int parseCommand(char* commandWithArg, char *command, char *argument[], int *isB
     tmpStr = strtok(NULL, " ");
   }
 
-  printf("BEFORE Command: [%s]\n", command);
-  for (int i=0; i < count; i++)
-  {
-    printf("Argument#%d: [%s]\n",i, argument[i]);
-  }
+  // printf("BEFORE Command: [%s]\n", command);
+  // for (int i=0; i < count; i++)
+  // {
+  //   printf("Argument#%d: [%s]\n",i, argument[i]);
+  // }
 
   //Check if we have a redirection of input/output
   for(int i=0; i < count; i++)
@@ -254,10 +256,18 @@ int parseCommand(char* commandWithArg, char *command, char *argument[], int *isB
     argument[count-1] = '\0';                     // Remove & from the argument list
   }
 
-  printf("AFTER Command: [%s]\n", command);
-  for (int i=0; i < count; i++)
-  {
-    printf("Argument#%d: [%s]\n",i, argument[i]);
-  }
+  // printf("AFTER Command: [%s]\n", command);
+  // for (int i=0; i < count; i++)
+  // {
+  //   printf("Argument#%d: [%s]\n",i, argument[i]);
+  // }
   return count;
+}
+
+void sigChildhandler(int sig)
+{
+  pid_t pid;
+  int *wstatus;
+
+  pid =  waitpid(-1, wstatus, WNOHANG);
 }

@@ -1,3 +1,6 @@
+//TODO: BUGLIST->
+//1. SegFault when : sort -n < sort.txt | grep 2 | less > hi.txt
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -16,6 +19,8 @@ int parseCommand(char *commandWithArg, char *command, char *argument[], int *isB
 void signalHandler(int signum);
 
 int pipefd[BINARY_SIZE][2]; // Handle as many number of commands
+pid_t childgroupIDs[BINARY_SIZE*BINARY_SIZE];
+long long childCount = 0;
 
 int main(int argc, char * argv[])
 {
@@ -47,6 +52,8 @@ int showMinish(void)
   long long totalCommands = 0;
   char *commandWithArg[ARGUMENT_SIZE];
   int status = 0;
+
+  childCount = 0;     // Reset number of child process
 
   for (int i = 0; i< BINARY_SIZE; i++)
   {
@@ -88,6 +95,7 @@ long long fetchTotalCommands(char *commandWithArg[])
 		perror("error reading line from stdin\n");
 		exit(-1);
 	}
+  *(inputString+lenOfCommand) = '\0';
 
   inputString = strtok(inputString, "\n");                                      // Trim inputString for \n
 
@@ -120,6 +128,7 @@ int performCommand(char *commandWithArg[], long long totalCommands)
   char *inputFileName = (char *)malloc(BINARY_SIZE*sizeof(char));
   char *outputFileName = (char *)malloc(BINARY_SIZE*sizeof(char));
   int commandCount = 0;
+  int initialChildFlag = 0; // If 0, child is initial child else not
 
   if(command == NULL || inputFileName == NULL || outputFileName == NULL)
   {
@@ -176,6 +185,13 @@ int performCommand(char *commandWithArg[], long long totalCommands)
 
     if (pid == 0)   // child
     {
+      if(setsid() == -1)      // Set pid of the child as it's group ID
+      {
+        perror("Error Setting Process Group ID for child");
+        exit(-1);
+      }
+      // printf("PGID from Child: %d\n", getpgid(getpid()));
+
       if(tmpTotalCmd > 0)
       {
         // printf("commandCount=%d && totalCommands=%lld\n", commandCount, totalCommands-1);
@@ -277,7 +293,7 @@ int performCommand(char *commandWithArg[], long long totalCommands)
         }
       }
     }
-    else
+    else      // Parent
     {
       if (commandCount != 0)
       {
@@ -290,6 +306,7 @@ int performCommand(char *commandWithArg[], long long totalCommands)
       commandCount++;
       if(isBackground == 0)                                       // If in background, don't wait for child to die and ready to serve next command
       {
+        childgroupIDs[childCount++] = pid;      // Add child Group ID in Array for further killing the child through signalpg
         waitpid(pid, wstatus, 0);
       }
     }
@@ -369,6 +386,12 @@ int parseCommand(char* commandWithArg, char *command, char *argument[], int *isB
     argument[count-1] = '\0';                     // Remove & from the argument list
   }
 
+  // printf("Total arguments: %d\n",count );
+  // for(int k=0; k< count; k++)
+  // {
+  //   printf("[%s]\n", argument[k]);
+  // }
+
   return count;
 }
 
@@ -380,12 +403,16 @@ void signalHandler (int signum)
   switch (signum)
   {
     case SIGCHLD:
-      printf("SIGCHLD Recieved\n");
+      // printf("SIGCHLD Recieved\n");
       pid =  waitpid(-1, wstatus, WNOHANG);
     break;
 
     case SIGINT:
-      printf("SIGINT Recieved\n");
+      for(long long i=0; i < childCount; i++)
+      {
+        // printf("Sending SIGINT to %d\n", childgroupIDs[i]);
+        killpg(childgroupIDs[i], SIGINT);
+      }
     break;
   }
 

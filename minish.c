@@ -168,10 +168,20 @@ int performCommand(char *commandWithArg[], long long totalCommands)
       free(inputFileName);
       free(outputFileName);
 
+      for(long long i=0; i < childCount; i++)
+      {
+        printf("Sending SIGKILL to: %d\n", childgroupIDs[i]);
+        if(killpg(childgroupIDs[i], SIGKILL) == -1)
+        {
+          perror("Error killing the process group");
+        }
+      }
+
       if (killpg(getpid(), SIGKILL) == -1)                          // Send SIGKILL to all the processes in the Process group created by parent Process minish
       {
         perror("Error killing the process group");
       }
+
       exit(0);
     }
 
@@ -185,10 +195,13 @@ int performCommand(char *commandWithArg[], long long totalCommands)
 
     if (pid == 0)   // child
     {
-      if(setsid() == -1)      // Set pid of the child as it's group ID
+      if(isBackground != 1)   // Only for the foregroud processes
       {
-        perror("Error Setting Process Group ID for child");
-        exit(-1);
+        if(setsid() == -1)      // Set pid of the child as it's group ID
+        {
+          perror("Error Setting Process Group ID for child");
+          exit(-1);
+        }
       }
       // printf("PGID from Child: %d\n", getpgid(getpid()));
 

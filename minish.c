@@ -10,16 +10,28 @@
 #define ARGUMENT_SIZE 1024                   // 1024 * 1024
 
 int showMinish(void);
-long long fetchTotalCommands(char **commandWithArg);                            // Store | separated command and Retuns total commands
-int performCommand(char **commandWithArg, long long totalCommands);             // Perform the fork on individual comand
+long long fetchTotalCommands(char *commandWithArg[]);                            // Store | separated command and Retuns total commands
+int performCommand(char *commandWithArg[], long long totalCommands);             // Perform the fork on individual comand
 int parseCommand(char *commandWithArg, char *command, char *argument[], int *isBackground, int *isInputRedirect, int *isOutputRedirect, char *inputFileName, char *outputFileName);     // Return number of arguments
-void sigChildhandler(int sig);
+void signalHandler(int signum);
 
 int pipefd[BINARY_SIZE][2]; // Handle as many number of commands
 
 int main(int argc, char * argv[])
 {
   int ret = 0;
+  struct sigaction signalActionNew, signalActionOld;
+
+  signalActionNew.sa_handler = signalHandler;
+  sigemptyset (&signalActionNew.sa_mask);
+  signalActionNew.sa_flags = SA_RESTART;      // Restart an Interrupted System call, Used when child dies in background, signal generates and getline is called
+
+  sigaction (SIGINT, NULL, &signalActionOld);
+  if (signalActionOld.sa_handler != SIG_IGN)
+    sigaction (SIGINT, &signalActionNew, NULL);
+  sigaction (SIGCHLD, NULL, &signalActionOld);
+  if (signalActionOld.sa_handler != SIG_IGN)
+    sigaction (SIGCHLD, &signalActionNew, NULL);
 
   ret = showMinish();
 
@@ -32,16 +44,9 @@ int main(int argc, char * argv[])
 
 int showMinish(void)
 {
-  // pid_t pid;
   long long totalCommands = 0;
-  char **commandWithArg = (char **)malloc(BINARY_SIZE*sizeof(char));
+  char *commandWithArg[ARGUMENT_SIZE];
   int status = 0;
-
-  if(commandWithArg == NULL)
-  {
-    perror("Memory not allocated.");
-    exit(-1);
-  }
 
   for (int i = 0; i< BINARY_SIZE; i++)
   {
@@ -54,21 +59,36 @@ int showMinish(void)
 
   status = performCommand(commandWithArg, totalCommands);
 
+  for (int i = 0; i< BINARY_SIZE; i++)      // Free the memory
+  {
+    free(commandWithArg[i]);
+  }
+
   showMinish();
-  free(commandWithArg);
   return 0;
 }
 
-long long fetchTotalCommands(char **commandWithArg)
+long long fetchTotalCommands(char *commandWithArg[])
 {
-  char *inputString = NULL;
+  FILE *fp;
+  char *inputString;
   char *tempCommandWithArg = NULL;
   size_t len = 0;
   ssize_t lenOfCommand = 0;
   long long commandCount = 0;
 
-  lenOfCommand = getline(&inputString, &len, stdin);
-  *(inputString+lenOfCommand) = '\0';
+  if ( (fp = fdopen(STDIN_FILENO, "r")) == NULL)
+  {
+		perror("Error, can't convert STDIN to read new command\n");
+		exit(-1);
+	}
+
+	if ( (lenOfCommand = getline(&inputString, &len, fp)) == -1)
+  {
+		perror("error reading line from stdin\n");
+		exit(-1);
+	}
+
   inputString = strtok(inputString, "\n");                                      // Trim inputString for \n
 
   tempCommandWithArg = strtok(inputString, "|");
@@ -86,7 +106,7 @@ long long fetchTotalCommands(char **commandWithArg)
   return commandCount;
 }
 
-int performCommand(char **commandWithArg, long long totalCommands)
+int performCommand(char *commandWithArg[], long long totalCommands)
 {
   char *command = (char *)malloc(BINARY_SIZE*sizeof(char));
   char *argument[ARGUMENT_SIZE] = {'\0'};
@@ -132,12 +152,17 @@ int performCommand(char **commandWithArg, long long totalCommands)
 
     totalArgument = parseCommand(commandWithArg[totalCommands - tmpTotalCmd], command, argument, &isBackground, &isInputRedirect, &isOutputRedirect, inputFileName, outputFileName);
 
-    // printf("COMMAND# %lld\n", totalCommands - tmpTotalCmd);
+    // printf("COMMAND# %s isBackground=%d isInputRedirect=%d isOutputRedirect=%d\n", command, isBackground, isInputRedirect, isOutputRedirect);
     if(strcmp(command, "exit") == 0)                                 // Handles exit command in minish
     {
       free(command);
       free(inputFileName);
       free(outputFileName);
+
+      if (killpg(getpid(), SIGKILL) == -1)                          // Send SIGKILL to all the processes in the Process group created by parent Process minish
+      {
+        perror("Error killing the process group");
+      }
       exit(0);
     }
 
@@ -267,10 +292,6 @@ int performCommand(char **commandWithArg, long long totalCommands)
       {
         waitpid(pid, wstatus, 0);
       }
-      else
-      {
-        signal(SIGCHLD, sigChildhandler);                         // Set handle to control child
-      }
     }
   }
 
@@ -300,10 +321,15 @@ int parseCommand(char* commandWithArg, char *command, char *argument[], int *isB
 
   int count = 1;
   tmpStr = strtok(NULL, " ");                     // Start fetching arguments
+
+  // printf("BEFO tmpStr=%s\n", tmpStr);
   while (tmpStr != NULL)
   {
-    strcpy(argument[count++],tmpStr);
+    // printf("YES tmpStr=[%s] count=%d argument[1]=%s argument[2]=%s\n", tmpStr, count, argument[1], argument[2]);
+    // argument[count++] = strdup("0");
+    strcpy(argument[count++],tmpStr);   //TODO: SegFault when : sort -n < sort.txt | grep 2 | less > hi.txt
     tmpStr = strtok(NULL, " ");
+    // printf("tmpStr=%s\n", tmpStr);
   }
 
   //Check if we have a redirection of input/output
@@ -328,6 +354,8 @@ int parseCommand(char* commandWithArg, char *command, char *argument[], int *isB
     }
   }
 
+  // printf("outputFileName=%s\n", outputFileName);
+
   if(*isInputRedirect == 1)     // We removed one argument as form of '<'
   {
     count = count-1;
@@ -344,10 +372,22 @@ int parseCommand(char* commandWithArg, char *command, char *argument[], int *isB
   return count;
 }
 
-void sigChildhandler(int sig)
+void signalHandler (int signum)
 {
   pid_t pid;
   int *wstatus;
 
-  pid =  waitpid(-1, wstatus, WNOHANG);
+  switch (signum)
+  {
+    case SIGCHLD:
+      printf("SIGCHLD Recieved\n");
+      pid =  waitpid(-1, wstatus, WNOHANG);
+    break;
+
+    case SIGINT:
+      printf("SIGINT Recieved\n");
+    break;
+  }
+
+  return;
 }

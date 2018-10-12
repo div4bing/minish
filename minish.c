@@ -430,10 +430,7 @@ void signalHandler(int signum)
       globalFilterChainEnd = 1;                                                 // Don't run any pending filter chain process since we Recieved SIGINT. This will be reset once new comand execution starts on minish
       for(i=0; i < childCount; i++)
       {
-        if(killpg(childgroupIDs[i], SIGINT) == -1)
-        {
-          perror("Error killing the process group");
-        }
+        killpg(childgroupIDs[i], SIGINT);
       }
       childCount = 0;                                                           // Reset number of child process
     break;

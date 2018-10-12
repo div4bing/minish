@@ -86,7 +86,10 @@ int showMinish(void)
 
     totalCommands = fetchTotalCommands(commandWithArg);
 
-    status = performCommand(commandWithArg, totalCommands);
+    if ((status = performCommand(commandWithArg, totalCommands)) == -1)
+    {
+      printf("Error performing the command\n");
+    }
 
     for (j = 0; j< BINARY_SIZE; j++)                                            // Free the memory
     {

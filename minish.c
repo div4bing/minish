@@ -1,6 +1,3 @@
-//TODO: BUGLIST->
-//1. SegFault when : sort -n < sort.txt | grep 2 | less > hi.txt
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -9,18 +6,19 @@
 #include <string.h>
 #include <stdbool.h>
 
-#define BINARY_SIZE 1024                     // 1024 * 1024
-#define ARGUMENT_SIZE 1024                   // 1024 * 1024
+#define BINARY_SIZE 1024
+#define ARGUMENT_SIZE 1024
 
-int showMinish(void);
-long long fetchTotalCommands(char *commandWithArg[]);                            // Store | separated command and Retuns total commands
-int performCommand(char *commandWithArg[], long long totalCommands);             // Perform the fork on individual comand
+int showMinish(void);                                                           // Minish terminal
+long long fetchTotalCommands(char *commandWithArg[]);                           // Store | separated command and Retuns total commands
+int performCommand(char *commandWithArg[], long long totalCommands);            // Perform the fork on individual comand
 int parseCommand(char *commandWithArg, char *command, char *argument[], int *isBackground, int *isInputRedirect, int *isOutputRedirect, char *inputFileName, char *outputFileName);     // Return number of arguments
 void signalHandler(int signum);
 
-int pipefd[BINARY_SIZE][2]; // Handle as many number of commands
+int pipefd[BINARY_SIZE][2];                                                     // Handle as many number of commands
 pid_t childgroupIDs[BINARY_SIZE*BINARY_SIZE];
 long long childCount = 0;
+int globalFilterChainEnd = 0;                                                   // This flag should be set from SIGINT signal handler when we recieve a SIGINT (Ctl+C) from minish. It should be reset when we run new command from minish
 
 int main(int argc, char * argv[])
 {
@@ -29,14 +27,33 @@ int main(int argc, char * argv[])
 
   signalActionNew.sa_handler = signalHandler;
   sigemptyset (&signalActionNew.sa_mask);
-  signalActionNew.sa_flags = SA_RESTART;      // Restart an Interrupted System call, Used when child dies in background, signal generates and getline is called
+  signalActionNew.sa_flags = SA_RESTART;                                        // Restart an Interrupted System call, Used when child dies in background, signal generates and getline is called
 
-  sigaction (SIGINT, NULL, &signalActionOld);
+  if (sigaction (SIGINT, NULL, &signalActionOld) == -1)
+  {
+    perror("Error attaching SIGINT signal action");
+  }
+
   if (signalActionOld.sa_handler != SIG_IGN)
-    sigaction (SIGINT, &signalActionNew, NULL);
-  sigaction (SIGCHLD, NULL, &signalActionOld);
+  {
+    if (sigaction (SIGINT, &signalActionNew, NULL) == -1)
+    {
+      perror("Error attaching SIGINT signal action");
+    }
+  }
+
+  if(sigaction (SIGCHLD, NULL, &signalActionOld) == -1)
+  {
+    perror("Error attaching SIGCHLD signal action");
+  }
+
   if (signalActionOld.sa_handler != SIG_IGN)
-    sigaction (SIGCHLD, &signalActionNew, NULL);
+  {
+    if(sigaction (SIGCHLD, &signalActionNew, NULL) == -1)
+    {
+      perror("Error attaching SIGCHLD signal action");
+    }
+  }
 
   ret = showMinish();
 
@@ -51,27 +68,31 @@ int showMinish(void)
 {
   long long totalCommands = 0;
   char *commandWithArg[ARGUMENT_SIZE];
-  int status = 0;
+  int status;
+  int i,j;
 
-  childCount = 0;     // Reset number of child process
-
-  for (int i = 0; i< BINARY_SIZE; i++)
+  while (1)                                                                     // Loop to show minish continuously
   {
-    commandWithArg[i] = (char *)malloc(BINARY_SIZE*sizeof(char));
+    totalCommands = 0;
+    status = 0;
+    childCount = 0;                                                             // Reset number of child process
+
+    for (i = 0; i < BINARY_SIZE; i++)
+    {
+      commandWithArg[i] = (char *)malloc(BINARY_SIZE*sizeof(char));
+    }
+
+    printf("minish> ");
+
+    totalCommands = fetchTotalCommands(commandWithArg);
+
+    status = performCommand(commandWithArg, totalCommands);
+
+    for (j = 0; j< BINARY_SIZE; j++)                                            // Free the memory
+    {
+      free(commandWithArg[j]);
+    }
   }
-
-  printf("minish> ");
-
-  totalCommands = fetchTotalCommands(commandWithArg);
-
-  status = performCommand(commandWithArg, totalCommands);
-
-  for (int i = 0; i< BINARY_SIZE; i++)      // Free the memory
-  {
-    free(commandWithArg[i]);
-  }
-
-  showMinish();
   return 0;
 }
 
@@ -84,17 +105,20 @@ long long fetchTotalCommands(char *commandWithArg[])
   ssize_t lenOfCommand = 0;
   long long commandCount = 0;
 
-  if ( (fp = fdopen(STDIN_FILENO, "r")) == NULL)
+  globalFilterChainEnd = 0;                                                     // Reset so that we can perform new executions from minish. Enabled only from SIGINT signal handler to stop exectuing pendng chain process if SIGINT recieved
+
+  if ((fp = fdopen(STDIN_FILENO, "r")) == NULL)
   {
-		perror("Error, can't convert STDIN to read new command\n");
+		perror("Error can't convert STDIN to read new command\n");
 		exit(-1);
 	}
 
-	if ( (lenOfCommand = getline(&inputString, &len, fp)) == -1)
+	if ((lenOfCommand = getline(&inputString, &len, fp)) == -1)
   {
 		perror("error reading line from stdin\n");
 		exit(-1);
 	}
+
   *(inputString+lenOfCommand) = '\0';
 
   inputString = strtok(inputString, "\n");                                      // Trim inputString for \n
@@ -107,7 +131,7 @@ long long fetchTotalCommands(char *commandWithArg[])
     tempCommandWithArg = strtok(NULL, "|");
   }
 
-  commandWithArg[commandCount] = NULL;     // In case if we want to detect how many command we have based till we find a NULL
+  commandWithArg[commandCount] = NULL;                                          // In case if we want to detect how many command we have based till we find a NULL
 
   free(inputString);
   free(tempCommandWithArg);
@@ -128,7 +152,9 @@ int performCommand(char *commandWithArg[], long long totalCommands)
   char *inputFileName = (char *)malloc(BINARY_SIZE*sizeof(char));
   char *outputFileName = (char *)malloc(BINARY_SIZE*sizeof(char));
   int commandCount = 0;
-  int initialChildFlag = 0; // If 0, child is initial child else not
+  int initialChildFlag = 0;                                                     // If 0, child is initial child else not
+  long long i;
+  int j;
 
   if(command == NULL || inputFileName == NULL || outputFileName == NULL)
   {
@@ -138,14 +164,8 @@ int performCommand(char *commandWithArg[], long long totalCommands)
 
   FILE *inputRedirectFile, *outputRedirectFile;
 
-  for(int i=0; i< ARGUMENT_SIZE;i++)
+  for (j=0; j < (tmpTotalCmd-1); j++)                                           // Create required number of pipes
   {
-    argument[i] = malloc(ARGUMENT_SIZE*sizeof(char));
-  }
-
-  for (int j=0; j < (tmpTotalCmd-1); j++)   // Create required number of pipes
-  {
-    // printf("Creating Pipe at # %d && tmpTotalCmd=%d\n", j, tmpTotalCmd);
     if (pipe(pipefd[j]) == -1)
     {
       perror("Error Creating a Pipe");
@@ -153,35 +173,38 @@ int performCommand(char *commandWithArg[], long long totalCommands)
     }
   }
 
-  while (tmpTotalCmd > 0)                                                        // Only do this if the total commands is at least 1
+  while ((tmpTotalCmd > 0) && (globalFilterChainEnd == 0))                      // Only do this if the total commands is at least 1
   {
     isBackground = 0;
     isInputRedirect = 0;
     isOutputRedirect = 0;
 
+    for(i=0; i < ARGUMENT_SIZE; i++)
+    {
+      argument[i] = malloc(ARGUMENT_SIZE*sizeof(char));
+    }
+
     totalArgument = parseCommand(commandWithArg[totalCommands - tmpTotalCmd], command, argument, &isBackground, &isInputRedirect, &isOutputRedirect, inputFileName, outputFileName);
 
-    // printf("COMMAND# %s isBackground=%d isInputRedirect=%d isOutputRedirect=%d\n", command, isBackground, isInputRedirect, isOutputRedirect);
-    if(strcmp(command, "exit") == 0)                                 // Handles exit command in minish
+    if(strcmp(command, "exit") == 0)                                            // Handles exit command in minish
     {
       free(command);
       free(inputFileName);
       free(outputFileName);
 
-      for(long long i=0; i < childCount; i++)
+      for(i=0; i < childCount; i++)
       {
-        printf("Sending SIGKILL to: %d\n", childgroupIDs[i]);
         if(killpg(childgroupIDs[i], SIGKILL) == -1)
         {
           perror("Error killing the process group");
         }
       }
+      childCount = 0;                                                           // Reset number of child process
 
-      if (killpg(getpid(), SIGKILL) == -1)                          // Send SIGKILL to all the processes in the Process group created by parent Process minish
+      if (killpg(getpid(), SIGKILL) == -1)                                      // Send SIGKILL to all the processes in the Process group created by parent Process minish
       {
         perror("Error killing the process group");
       }
-
       exit(0);
     }
 
@@ -193,31 +216,24 @@ int performCommand(char *commandWithArg[], long long totalCommands)
       return -1;
     }
 
-    if (pid == 0)   // child
+    if (pid == 0)                                                               // CHILD SCOPE
     {
-      if(isBackground != 1)   // Only for the foregroud processes
+      if(setsid() == -1)                                                        // Set pid of the child as it's group ID
       {
-        if(setsid() == -1)      // Set pid of the child as it's group ID
-        {
-          perror("Error Setting Process Group ID for child");
-          exit(-1);
-        }
+        perror("Error Setting Process Group ID for child");
+        exit(-1);
       }
-      // printf("PGID from Child: %d\n", getpgid(getpid()));
 
       if(tmpTotalCmd > 0)
       {
-        // printf("commandCount=%d && totalCommands=%lld\n", commandCount, totalCommands-1);
         if(commandCount != 0)
         {
           close(pipefd[commandCount-1][1]);
-          // printf("Redirect Input from #%d\n", commandCount - 1);
           if (dup2(pipefd[commandCount-1][0], 0) == -1)
           {
             perror("Error Redirecting Input");
             return -1;
           }
-          // close(pipefd[commandCount-1][0]);
         }
         else
         {
@@ -231,13 +247,11 @@ int performCommand(char *commandWithArg[], long long totalCommands)
         if (commandCount < (totalCommands-1))
         {
           close(pipefd[commandCount][0]);
-          // printf("Redirect Output to #%d\n", commandCount);
           if (dup2(pipefd[commandCount][1], 1) == -1)
           {
             perror("Error Redirecting Output");
             return -1;
           }
-          // close(pipefd[commandCount][1]);
         }
         else
         {
@@ -249,8 +263,7 @@ int performCommand(char *commandWithArg[], long long totalCommands)
         }
       }
 
-      // Check for regular commands "exit" and "cd"
-      if(strcmp(command, "cd") == 0)                                         // Handles CD command
+      if(strcmp(command, "cd") == 0)                                            // Handles CD command
       {
         if(chdir(argument[1]) == -1)
         {
@@ -264,7 +277,7 @@ int performCommand(char *commandWithArg[], long long totalCommands)
           printf("Process %d in background mode\n", getpid());
         }
 
-        if (isInputRedirect == 1)                                             // Redirecy Input
+        if (isInputRedirect == 1)                                               // Redirecy Input
         {
           inputRedirectFile = fopen(inputFileName,"r");
           if(inputRedirectFile == NULL)
@@ -281,7 +294,7 @@ int performCommand(char *commandWithArg[], long long totalCommands)
           fclose(inputRedirectFile);
         }
 
-        if (isOutputRedirect == 1)                                       // Redirect Output
+        if (isOutputRedirect == 1)                                              // Redirect Output
         {
           outputRedirectFile = fopen(outputFileName,"w");
 
@@ -306,21 +319,25 @@ int performCommand(char *commandWithArg[], long long totalCommands)
         }
       }
     }
-    else      // Parent
+    else                                                                        // PARENT SCOPE
     {
-      if (commandCount != 0)
+      if (commandCount != 0)                                                    // If more than one command
       {
-        // printf("CLOSING commandCount=%d\n", commandCount-1);
         close(pipefd[commandCount-1][0]);
         close(pipefd[commandCount-1][1]);
       }
 
       tmpTotalCmd--;
       commandCount++;
-      if(isBackground == 0)                                       // If in background, don't wait for child to die and ready to serve next command
+      if(isBackground == 0)                                                     // If in background, don't wait for child to die and ready to serve next command
       {
-        childgroupIDs[childCount++] = pid;      // Add child Group ID in Array for further killing the child through signalpg
-        waitpid(pid, wstatus, 0);
+        childgroupIDs[childCount++] = pid;                                      // Add child Group ID in Array for further killing the child through signalpg
+        waitpid(pid, wstatus, 0);                                               // Wait for the foreground process to finish
+      }
+
+      for(i=0; i < ARGUMENT_SIZE; i++)
+      {
+        free(argument[i]);
       }
     }
   }
@@ -334,10 +351,12 @@ int performCommand(char *commandWithArg[], long long totalCommands)
 int parseCommand(char* commandWithArg, char *command, char *argument[], int *isBackground, int *isInputRedirect, int *isOutputRedirect, char *inputFileName, char *outputFileName)
 {
   char * tmpStr = strtok(commandWithArg, " ");
-  if (tmpStr != NULL)                             // Fetch the command first
+  int i = 0, j = 0;
+
+  if (tmpStr != NULL)                                                           // Fetch the command first
   {
     strcpy(command,tmpStr);
-    strcpy(argument[0],tmpStr);                   // First argument should be the command itself
+    strcpy(argument[0],tmpStr);                                                 // First argument should be the command itself
 
     if (command[strlen(command) - 1] == '&')
     {
@@ -346,36 +365,31 @@ int parseCommand(char* commandWithArg, char *command, char *argument[], int *isB
   }
   else
   {
-    return 0;   // We don't have command so argument does not matter
+    return 0;                                                                   // We don't have command so argument does not matter
   }
 
-  int count = 1;
-  tmpStr = strtok(NULL, " ");                     // Start fetching arguments
+  int count = 1;                                                                // First argument is command itself, so start from 2nd place
+  tmpStr = strtok(NULL, " ");                                                   // Start fetching arguments
 
-  // printf("BEFO tmpStr=%s\n", tmpStr);
   while (tmpStr != NULL)
   {
-    // printf("YES tmpStr=[%s] count=%d argument[1]=%s argument[2]=%s\n", tmpStr, count, argument[1], argument[2]);
-    // argument[count++] = strdup("0");
-    strcpy(argument[count++],tmpStr);   //TODO: SegFault when : sort -n < sort.txt | grep 2 | less > hi.txt
+    strcpy(argument[count++],tmpStr);
     tmpStr = strtok(NULL, " ");
-    // printf("tmpStr=%s\n", tmpStr);
   }
 
-  //Check if we have a redirection of input/output
-  for(int i=0; i < count; i++)
+  for(i=0; i < count; i++)                                                      //Check if we have a redirection of input/output
   {
-    if (*argument[i] == '<')                   // Check for input redirection
+    if (*argument[i] == '<')                                                    // Check for input redirection
     {
       *isInputRedirect = 1;
       strcpy(inputFileName,argument[i+1]);
-      for (int j=i+1; j < count; j++)          // Skip '<' and copy rest as argument
+      for (j=i+1; j < count; j++)                                               // Skip '<' and copy rest as argument
       {
         strcpy(argument[i],argument[j]);
       }
     }
 
-    if (*argument[i] == '>')                   // Check for outpit redirection
+    if (*argument[i] == '>')                                                    // Check for outpit redirection
     {
       *isOutputRedirect = 1;
       strcpy(outputFileName,argument[i+1]);
@@ -384,48 +398,41 @@ int parseCommand(char* commandWithArg, char *command, char *argument[], int *isB
     }
   }
 
-  // printf("outputFileName=%s\n", outputFileName);
-
-  if(*isInputRedirect == 1)     // We removed one argument as form of '<'
+  if(*isInputRedirect == 1)                                                     // We removed one argument as form of '<'
   {
     count = count-1;
   }
 
   argument[count] = '\0';
 
-  if (*argument[count-1] == '&')                   // Check for the background process
+  if (*argument[count-1] == '&')                                                // Check for the background process
   {
     *isBackground = 1;
-    argument[count-1] = '\0';                     // Remove & from the argument list
+    argument[count-1] = '\0';                                                   // Remove & from the argument list
   }
-
-  // printf("Total arguments: %d\n",count );
-  // for(int k=0; k< count; k++)
-  // {
-  //   printf("[%s]\n", argument[k]);
-  // }
 
   return count;
 }
 
-void signalHandler (int signum)
+void signalHandler(int signum)
 {
   pid_t pid;
   int *wstatus;
+  long long i = 0;
 
   switch (signum)
   {
-    case SIGCHLD:
-      // printf("SIGCHLD Recieved\n");
+    case SIGCHLD:                                                               // Handles SIGCHLD, when a child process dies
       pid =  waitpid(-1, wstatus, WNOHANG);
     break;
 
-    case SIGINT:
-      for(long long i=0; i < childCount; i++)
+    case SIGINT:                                                                // Handles SIGINT, when Ctl+C is pressed
+      globalFilterChainEnd = 1;                                                 // Don't run any pending filter chain process since we Recieved SIGINT. This will be reset once new comand execution starts on minish
+      for(i=0; i < childCount; i++)
       {
-        // printf("Sending SIGINT to %d\n", childgroupIDs[i]);
         killpg(childgroupIDs[i], SIGINT);
       }
+      childCount = 0;                                                           // Reset number of child process
     break;
   }
 
